@@ -1,0 +1,9 @@
+https://davidbert.github.io/MODIA_AIF/
+
+# REST API
+https://davidbert.github.io/MODIA_AIF/developpement/api.html
+# NLP
+https://davidbert.github.io/MODIA_AIF/nlp/nlp.html
+# Reconmmander system 
+https://davidbert.github.io/MODIA_AIF/rec_sys/rec_sys.html
+# Interpretability
