@@ -1,0 +1,1819 @@
+---
+title: "Rapport du Projet d'Analyse de Données et de Statistiques"
+author: "Rémi Colin, Talel Taieb, Karima Ghamnia, Evan Rabineau"
+institute: "INSA Toulouse" 
+output: 
+  pdf_document :
+    toc : TRUE
+    toc_depth : 2
+    number_section : TRUE
+    fig_caption: yes
+header-includes:
+   - \usepackage{dsfont}
+   - \usepackage{color}
+   - \newcommand{\1}{\mathds{1}}
+---
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 8, fig.height = 5)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(usethis)
+library(ggcorrplot)
+library(reticulate)
+library(ggplot2)
+library(corrplot)
+library(FactoMineR)
+library(factoextra)
+library(gridExtra)
+library(knitr)
+library(DT)
+library(reshape2)
+library(pivottabler)
+library(plotly)
+library(ggfortify)
+library(mclust)
+library(cluster)
+library(ppclust)
+library(reshape)
+library(circlize)
+library(viridis)
+library(ggrepel)
+library(MASS)
+library(leaps)
+library(glmnet)
+library(skimr)
+library(GGally)
+library(grid)
+library(caret)
+library(ROCR)
+library(VGAM)
+library(nnet)
+library(broom)
+library(clusterSim)
+```
+
+```{python, echo=T,error=F,warning=F,echo=F}
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
+
+from sklearn.preprocessing import scale
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics.cluster import adjusted_rand_score
+from sklearn.metrics import silhouette_samples, silhouette_score
+from sklearn_extra.cluster import KMedoids
+from sklearn.neighbors import NearestNeighbors
+from sklearn.cluster import DBSCAN
+from scipy.cluster.hierarchy import dendrogram, linkage
+from sklearn.cluster import AgglomerativeClustering
+from yellowbrick.cluster import KElbowVisualizer
+from sklearn.mixture import GaussianMixture as GMM 
+
+import statsmodels.api as sm
+from statsmodels.stats.anova import anova_lm
+```
+
+# Introduction 
+
+Ce projet vise à étudier un jeu de données pour G = 1615 gènes d'une plante dont le modèle est : $$Y_{gtsr}=log_2(X_{gtsr}+1)-log_2(X_{gt_0}+1)$$ où :
+
+-   $X_{gtsr}$ est la mesure d'expression du gène $g \in {G1,...,G1615}$ npour le traitement t $\in {T1,T2,T3}$ pour le réplicat $r \in {R1,R2}$ et au temps $s \in {1h,2h,3h,4h,5h,6h}\\$
+-   $X_{gt_0}$ est l'expression du gène g pour un traitement de référence $t_0$
+
+Toutes les sorties R présentes dans ce rapport que nous avons pu réaliser en Python sont présentes dans le Rmarkdown.
+
+Cependant, nous avons rencontré des difficultés à superposer chaque figure exactement avec l'interprétation adéquate.
+
+# Statistiques Descriptives
+
+## Visualisation de la DataBase 
+
+```{r tabdata, echo=F}
+Data = read.table("Data_Etudiants_2023.txt",header=T,sep=";")
+summary(skim(Data))
+```
+
+```{python,echo=F,eval=F}
+datapy = r.Data
+print("La dimension du jeu de données est {}".format(datapy.shape))
+datapy.head()
+```
+
+On a 1615 observations et 36 variables. Chaque réponse est liée à un traitement utilisé sur une réplicat pendant une certaine durée. On a 3 traitements (T1,T2,T3) effectués sur 2 réplicats (R1,R2) et on réalise des observations à chaque heure passée dans une durée de 6 heures.
+
+```{r,echo=FALSE,eval=FALSE}
+summary(data)
+```
+
+## Analyse des données 
+
+Dans cette partie, on va réaliser une analyse sur les réponses des gènes.
+
+```{r,echo=FALSE}
+genes = rep(names(Data), 3)
+exprime = c(rep("Sous exprimé", 36), rep("Non exprimé", 36), rep("Sur exprimé", 36))
+pourcentage_expresion = c(apply(Data<(-1), 2, mean), apply((Data>(-1))&(Data<1), 2, mean), apply(Data>1, 2, mean))
+
+DataF.freq = data.frame(genes, exprime, pourcentage_expresion)
+DataF.freq$genes = factor(DataF.freq$genes, levels=names(Data))
+DataF.freq$exprime = factor(DataF.freq$exprime, levels=c("Sur exprimé", "Non exprimé", "Sous exprimé"))
+```
+
+```{r pourcentage,echo=FALSE,fig.align='center',fig.height=2,fig.width=5,fig.show='hold',cache=FALSE,fig.cap="Barplot de pourcentage des gènes sur/non/sous exprimés pour chaque variable"}
+ggplot(data=DataF.freq, aes(x=genes, y=pourcentage_expresion, fill=exprime)) + labs(x="Experience", y="Genes (%)", fill="Exprimé ?") + geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 90, size = 8))
+```
+
+Ce graphique montre le pourcentage des gènes non/sous/sur exprimés pour chaque variable. On remarque que la majorité des gènes pour le traitement T1 sont non exprimés. Tandis que, pour T2 et T3, ils sont soit sur exprimés soit sous exprimés.
+
+```{python, eval=F, echo=F}
+data=datapy.copy()
+
+genes = np.repeat(list(data.columns), 3)
+exprime = np.concatenate([['Sous exprimé']*36, ['Non exprimé']*36, ['Sur exprimé']*36])
+pourcentage_expression = np.concatenate([(data<-1).mean(axis=0), ((data>-1)&(data<1)).mean(axis=0), (data>1).mean(axis=0)])
+
+DataF_freq = pd.DataFrame({'genes': genes, 'exprime': exprime, 'pourcentage_expression': pourcentage_expression})
+DataF_freq['genes'] = pd.Categorical(DataF_freq['genes'], categories=list(Data.columns), ordered=True)
+DataF_freq['exprime'] = pd.Categorical(DataF_freq['exprime'], categories=['Sur exprimé', 'Non exprimé', 'Sous exprimé'], ordered=True)
+
+plt.close()
+sns.barplot(x='genes', y='pourcentage_expression', hue='exprime', data=DataF_freq)
+plt.xticks(rotation=90)
+plt.xlabel('Experience')
+plt.ylabel('Genes (%)')
+plt.legend(title='Exprimé ?')
+plt.show()
+
+```
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,fig.width=5,fig.height=2,message=FALSE,fig.align='center',fig.show='hold',cache=FALSE,fig.cap="Etudes sur le comportement moyen des gènes pour T1, T2 et T3 pour chaque réplicat "}
+# réponse moyenne de chaque traitement 
+Data_copy=mutate(Data, T1_R1 = rowMeans(Data[,1:6]), T2_R1 = rowMeans(Data[,7:12]), T3_R1 = rowMeans(Data[,13:18]), T1_R2 = rowMeans(Data[,19:24]), T2_R2 = rowMeans(Data[,25:30]), T3_R2 = rowMeans(Data[,31:36]))
+new_data=Data_copy[,37:42]
+p1=ggcorrplot(cor(new_data),method = "square")
+p2=ggpairs(new_data)
+
+g <- grid.grabExpr(print(p2))
+grid.arrange(g, p1, widths=c(1.5,1.5))
+
+
+```
+
+```{python,eval=F,echo=F}
+
+data_copy = datapy.copy()
+data_copy["T1_R1"] = datapy.iloc[:, :6].mean(axis=1)
+data_copy["T2_R1"] = datapy.iloc[:, 6:12].mean(axis=1)
+data_copy["T3_R1"] = datapy.iloc[:, 12:18].mean(axis=1)
+data_copy["T1_R2"] = datapy.iloc[:, 18:24].mean(axis=1)
+data_copy["T2_R2"] = datapy.iloc[:, 24:30].mean(axis=1)
+data_copy["T3_R2"] = datapy.iloc[:, 30:36].mean(axis=1)
+
+new_data = data_copy.iloc[:, 36:42]
+
+sns.pairplot(new_data)
+plt.show()
+```
+
+On fait une étude sur le comportement moyen des traitements sur les deux réplicats. On remarque qu'il y a une grande corrélation entre T2 et T3. On remarque également qu'il y a une symétrie entre R1 et R2. Pour les prochaines analyses, on va se concentrer sur un seul réplicat car il y a une forte corrélation entre R1 et R2 donc on n'aura pas plus d'informations si on utilise les deux réplicats dans nos analyses.
+
+```{python,echo=F,eval=F}
+plt.close()
+corr = new_data.corr()
+sns.heatmap(corr, annot = True, cmap = 'coolwarm', linewidths = 0.2)
+plt.show()
+```
+
+```{python,echo=F,eval=F}
+import plotly.express as px
+
+corr = datapy.corr()
+corr.style.background_gradient(cmap='coolwarm')
+fig = px.imshow(corr)
+fig.show()
+```
+
+```{r,echo=F,warning=FALSE,fig.width=5,fig.height=2.5,message=FALSE,fig.align='center',fig.show='hold',cache=FALSE,fig.cap="Boxplot sur les données brutes et données centrées réduit pour la réplicat R1"}
+data_scale=scale(Data[,1:18])
+df=melt(Data[,1:18])
+df1=melt(data_scale)
+par(mfrow = c(1, 2))
+p1=ggplot(df, aes(x=variable, y=value)) +            # Applying ggplot function
+  geom_boxplot(fill = "green")+geom_hline(yintercept=-1, color = "red")+geom_hline(yintercept=1, color = "red")+ theme(axis.text.x = element_text(angle = 90))+ggtitle('Raw Data')+xlab('variable')+ylab('Response')
+
+p2=ggplot(df1, aes(x=X2, y=value)) +            # Applying ggplot function
+  geom_boxplot(fill = "green")+geom_hline(yintercept=-1, color = "red")+geom_hline(yintercept=1, color = "red")+ theme(axis.text.x = element_text(angle = 90))+ggtitle('Scale.
+                                                                                                                                                         Data')+xlab('variable')+ylab('Response')
+par(mar = c(4, 4, 0.1, 0.1)) 
+grid.arrange(p1, p2, nrow = 1)
+
+```
+
+```{python,eval=F,eval=F,include=F}
+plt.close()
+plt.boxplot(datapy)
+plt.axhline(y=1,c='r')
+plt.axhline(y=-1,c='r')
+plt.show()
+```
+
+```{python,echo=F,eval=F,include=F}
+# réduction
+data_scaled=scale(datapy)
+
+plt.close()
+plt.boxplot(data_scaled)
+plt.axhline(y=1,c='r')
+plt.axhline(y=-1,c='r')
+plt.show()
+```
+
+[Analyse sur R1 :]{.underline}
+
+On remarque une faible variance pour la réponse liée au traitement T1, même en centrant et en réduisant les données. L'effet de T1 est trop faible. Les réponses sous T2 et T3 varient énormément surtout dans les dernières heures. On remarque également que quelques réponses dépassent 1 ou sont bien plus faibles que -1. A partir de 3h, la moyenne des réponses dépasse 1 ce qui traduit qu'il y a beaucoup de gènes qui sont sur exprimés.
+
+Donc il y aura des données manquantes pour T2 et T3 surtout dans les dernières heures comme on peut le voir ci-dessous.
+
+```{r,echo=F,warning=FALSE,fig.width=5,fig.height=1.5,message=FALSE,fig.align='center',fig.show='hold',cache=FALSE,cache=FALSE,fig.cap="Repartition des réponses des gènes pour T2 et T3 a 6h pour R1"}
+p1=ggplot(Data,aes(Data[,12]))+geom_histogram(fill = "blue")+ylab("réponse")+xlab("T2_6h_R1")+geom_vline(xintercept = 1, color = "red")+geom_vline(xintercept = -1, color = "red")
+p2=ggplot(Data,aes(Data[,18]))+geom_histogram(fill = "blue")+ylab("réponse")+xlab("T3_6h_R1")+geom_vline(xintercept = 1, color = "red")+geom_vline(xintercept = -1, color = "red")
+grid.arrange(p1,p2,nrow=1)
+```
+
+```{python,echo=F,eval=F}
+plt.close()
+sns.histplot(data=datapy, x=datapy.iloc[:,11], element='step', fill='blue')
+plt.ylabel("réponse")
+plt.xlabel("T2_6h_R1")
+plt.axvline(x=1, color='red', linestyle='dashed')
+plt.axvline(x=-1, color='red', linestyle='dashed')
+plt.show()
+
+
+plt.close()
+sns.histplot(data=datapy, x=datapy.iloc[:,17], element='step', fill='blue')
+plt.ylabel("réponse")
+plt.xlabel("T3_6h_R1")
+plt.axvline(x=1, color='red', linestyle='dashed')
+plt.axvline(x=-1, color='red', linestyle='dashed')
+plt.show()
+
+```
+
+## Analyse en Composantes Principale 
+
+Nous allons maintenant réaliser une Analyse en Composantes Principales (ACP) sur le jeu de donnée étudié afin de réduire son nombre de dimensions. De plus, au vu du boxplot des données brutes, on observe une variance très forte. Nous décidons donc de réduire et centrer les données au préalable.
+
+```{r,echo=FALSE}
+x =scale(Data)
+```
+
+```{r,echo=F,warning=FALSE,fig.width=6,fig.height=2.5,fig.align='center',fig.show='hold',cache=FALSE,fig.cap="Inertie des composants en fonction des composantes principales"}
+
+pca <- prcomp(data_scale)
+cpa_data_scaled <- as.matrix(pca$x)
+eigenvalues <- pca$sdev^2 / sum(pca$sdev^2)
+scree_data <- data.frame(PC=1:length(eigenvalues), Eigenvalue=eigenvalues)
+
+p1=ggplot(scree_data[1:10,], aes(x=PC, y=Eigenvalue)) +
+  geom_bar(stat="identity", fill="blue", alpha=0.5) +
+  geom_line(aes(x=PC, y=Eigenvalue)) +
+  xlab("Composante principale") +
+  ylab("Eigenvalue") +
+  ggtitle("Scree plot of PCA")
+
+ratios <- cumsum(100 * eigenvalues)
+
+p2=ggplot(data.frame(component=1:length(ratios), ratios=ratios), aes(x=component, y=ratios)) +
+  geom_bar(stat="identity") +
+  xlab("Composante principale") +
+  ylab("Variance cumulée en %") +
+  geom_hline(yintercept=80, color="red")
+
+
+
+grid.arrange(p1,p2,nrow=1)
+
+```
+
+```{python,eval=F,echo=F}
+pca = PCA()
+cpa_data_scaled = pca.fit_transform(data_scaled)
+eigenvalues = pca.explained_variance_ratio_
+scree_data = pd.DataFrame({'PC': range(1, len(eigenvalues)+1), 'Eigenvalue': eigenvalues})
+
+fig = go.Figure()
+
+fig.add_trace(
+    go.Scatter(
+        x=scree_data.iloc[:10,:]['PC'],
+        y=scree_data.iloc[:10,:]['Eigenvalue'],name = ""
+    ))
+
+fig.add_trace(
+    go.Bar(
+        x=scree_data.iloc[:10,:]['PC'],
+        y=scree_data.iloc[:10,:]['Eigenvalue'], name = "Percentage of explained variances"
+    ))
+
+fig.show()
+```
+
+```{python, echo=F, eval=F}
+ratios = np.cumsum(100*pca.explained_variance_ratio_)
+
+plt.close()
+plt.bar(range(len(ratios)), np.cumsum(100*pca.explained_variance_ratio_))
+plt.xticks(range(len(ratios)))
+plt.axhline(y=80,c='r')
+plt.xlabel("Composante principale")
+plt.ylabel("Variance cumulée en %")
+plt.show()
+```
+
+On remarque sur le graphique à droite que le pourcentage d'inertie expliquée est faible à partir de la 4-ème composante. Les quatre premières composantes contiennent plus de 95% de l'information d'après le graphique de gauche. On choisi donc de conserver uniquement les quatre premières composantes.
+
+Sous le graphique ci-dessous est affiché la projection des coordonnées de l'ACP sur les deux premières dimensions.
+
+```{r,echo=FALSE,fig.align='center',fig.height=3,fig.width=4,warning=FALSE,fig.show='hold',cache=FALSE,fig.cap="Cercle de corrélation ACP des données sur les 2 premières composantes"}
+res.acp=prcomp(Data,scale. = TRUE)
+fviz_pca_var(res.acp, 
+             col.var = "contrib", # use a color gradient to indicate the contribution of each variable
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), # custom color gradient
+             repel = TRUE, # avoid text labels overlapping
+             ggtheme = theme_classic() # use the classic ggplot theme
+             )
+```
+
+```{r,eval=F,echo=F}
+fviz_pca_var(res.acp,axes=c(1,3),
+             col.var = "contrib", # use a color gradient to indicate the contribution of each variable
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), # custom color gradient
+             repel = TRUE, # avoid text labels overlapping
+             ggtheme = theme_classic() # use the classic ggplot theme
+             )
+fviz_pca_var(res.acp,axes=c(1,4),
+             col.var = "contrib", # use a color gradient to indicate the contribution of each variable
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), # custom color gradient
+             repel = TRUE, # avoid text labels overlapping
+             ggtheme = theme_classic() # use the classic ggplot theme
+             )
+```
+
+```{python,eval=F,echo=F}
+coord1=pca.components_[0]*np.sqrt(pca.explained_variance_[0])
+coord2=pca.components_[1]*np.sqrt(pca.explained_variance_[1])
+coord3=pca.components_[2]*np.sqrt(pca.explained_variance_[2])
+coord4=pca.components_[3]*np.sqrt(pca.explained_variance_[3])
+
+# La dimension 2 en fonction de la dimension 1
+plt.close()
+fig = plt.figure(figsize=(8,8))
+ax = fig.add_subplot(1, 1, 1)
+for i, j, nom in zip(coord1,coord2, datapy.columns):
+    plt.text(i, j, nom)
+    plt.arrow(0,0,i,j,color='black')
+plt.axis((-1.2,1.2,-1.2,1.2))
+# cercle
+c=plt.Circle((0,0), radius=1, color='gray', fill=False)
+ax.add_patch(c)
+plt.axhline(y=0,xmin=0.085,xmax=0.915,linestyle="--",c='k')
+plt.axvline(x=0,ymin=0.085,ymax=0.915,linestyle="--",c='k')
+plt.xlabel("Axe 1")
+plt.ylabel("Axe 2")
+plt.show()
+
+# La dimension 3 en fonction de la dimension 1
+plt.close()
+fig = plt.figure(figsize=(8,8))
+ax = fig.add_subplot(1, 1, 1)
+for i, j, nom in zip(coord1,coord3, datapy.columns):
+    plt.text(i, j, nom)
+    plt.arrow(0,0,i,j,color='black')
+plt.axis((-1.2,1.2,-1.2,1.2))
+# cercle
+c=plt.Circle((0,0), radius=1, color='gray', fill=False)
+ax.add_patch(c)
+plt.axhline(y=0,xmin=0.085,xmax=0.915,linestyle="--",c='k')
+plt.axvline(x=0,ymin=0.085,ymax=0.915,linestyle="--",c='k')
+plt.xlabel("Axe 1")
+plt.ylabel("Axe 3")
+plt.show()
+
+# Dimension 4 en fonction de la dimension 1
+plt.close()
+fig = plt.figure(figsize=(8,8))
+ax = fig.add_subplot(1, 1, 1)
+for i, j, nom in zip(coord1,coord4, datapy.columns):
+    plt.text(i, j, nom)
+    plt.arrow(0,0,i,j,color='black')
+plt.axis((-1.2,1.2,-1.2,1.2))
+# cercle
+c=plt.Circle((0,0), radius=1, color='gray', fill=False)
+ax.add_patch(c)
+plt.axhline(y=0,xmin=0.085,xmax=0.915,linestyle="--",c='k')
+plt.axvline(x=0,ymin=0.085,ymax=0.915,linestyle="--",c='k')
+plt.xlabel("Axe 1")
+plt.ylabel("Axe 4")
+plt.show()
+```
+
+On remarque qu'il y a un grand nombre de variables, ce qui peut rendre l'interprétation compliquée. Néanmoins, nous pouvons remarquer que la dimension 1 porte les variables liées au traitement T2 et T3, que la 2-ème dimension porte le traitement T1, que la 3-ème dimension porte sur les premières heures de chacun des traitements et que la 4-ème dimension porte sur l'évolution des différents traitements au cours du temps.
+
+Pour mieux appréhender les données, nous allons visualiser les variables qui contribuent le plus à chacune des quatre premières dimensions.
+
+```{r,echo=FALSE,warning=FALSE,fig.width=6,fig.height=2.5,fig.show='hold',cache=FALSE,fig.cap="Participation des variables avec chaque dimension"}
+
+p1=fviz_contrib(res.acp, choice = "var", axes = 1, top = 12)
+p2=fviz_contrib(res.acp, choice = "var", axes = 2, top = 12)
+p3=fviz_contrib(res.acp, choice = "var", axes = 3, top = 12)
+p4=fviz_contrib(res.acp, choice = "var", axes = 4, top = 12)
+par(mar = c(4, 4, 0.1, 0.1)) 
+grid.arrange(p1, p2,p3,p4, nrow = 2,ncol=2)
+
+
+```
+
+```{python,eval=F,echo=F}
+plt.close()
+for i in range(1,5):
+    plt.figure()
+    plt.plot(pca.components_[i])
+    plt.axvline(x=0,linestyle="--",c='r')
+    plt.axvline(x=6,linestyle="--",c='r')
+    plt.axvline(x=12,linestyle="--",c='r')
+    plt.axvline(x=18,linestyle="--",c='r')
+    plt.axvline(x=24,linestyle="--",c='r')
+    plt.axvline(x=30,linestyle="--",c='r')
+    plt.axvline(x=36,linestyle="--",c='r')
+```
+
+Ces résultats nous permettent d'affirmer que : - la dimension 1 porte essentiellement les traitements T2 et T3, - la dimension 2 porte essentiellement le traitement T1, - la dimension 3 porte les premières heures de chaque traitement, - la dimension 4 l'évolution des différents traitements au cours du temps.
+
+```{r,echo=FALSE,warning=FALSE,fig.width=5,fig.height=3,fig.show='hold',cache=FALSE,fig.cap="Acp sur les individus sur les 2 premières composantes"}
+autoplot(res.acp)
+```
+
+Ce nuage de points nous permet de nous donner une première idée sur des potentielles classes pour notre jeu de données. Notre hypothèse est que c'est deux classes présentes le groupes des gènes sous exprimés et les gène sur exprimés pour les traitements T2 et T3.
+
+# Classification
+
+## Classification des variables "Tx xh Rx" 
+
+Tout d'abord, nous transposons la matrice des données pour mettre les gènes en variables et les Tx_Hx_Rx en individus. Puis, nous réalisons une ACP pour observer les résultats projetés sur les deux premières dimensions de l'ACP.
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,fig.height=2.5,fig.width=5,fig.cap="PCA sur les individus"}
+data_T1=t(Data)
+resacp_T=PCA(scale(data_T1),graph = FALSE)
+fviz_pca_ind(resacp_T,col.var = "contrib", # use a color gradient to indicate the contribution of each variable
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), # custom color gradient
+             repel = TRUE, # avoid text labels overlapping
+             ggtheme = theme_classic() # use the classic ggplot theme
+             )
+```
+
+```{python,eval=F,echo=F}
+data=t.data_T
+mypca = PCA(n_components=3);
+mypca.fit(data);
+dataPCA=mypca.fit_transform(data)
+sns.lmplot( x="Dim1", y="Dim2", data=pca_df, fit_reg=False, legend=True)
+plt.show()
+plt.close()
+```
+
+On observe que les deux premières dimensions de l'ACP nous donnent 90 % de la variance expliquée. De plus, visuellement on observe 3 clusters :
+
+-   Un premier cluster contenant les traitements T1 et les traitements T2 et T3 mais sur les premières heures de l'experience. Au vu des analyses précédentes, on peut suggérer que ce cluster représente les temps et traitements pour lesquelle les gènes réagissent pas ou trés peu.
+
+-   Un deuxième cluster contenant les traitements T2 et T3 à des heures intermédiaires de l'expérience (de 2h à 4h).
+
+-   On peut observer un troisième clyster contenant les traitements T2 et T3 à des heures finales de l'expérience (de 4h à 6h).
+
+Pour les deux derniers clusterings, on peut conjecturer que c'est l'efficacité du traitement qui les différencies.
+
+Ce clustering n'est que visuel et n'utilise pas vraiment de méthode de clustering, il est juste là pour nous donner une idée de notre nouveau jeu de données. Maintenant, nous allons essayer de confirmer nos différentes hypothèses avec des méthodes de clustering.
+
+```{r,echo=FALSE}
+data_T=(resacp_T$ind$coord)[,1:3]
+```
+
+### Avec les Kmeans 
+
+Nous commençons avec un algorithme de Kmeans. Cet algorihtme est très sensible à l'initialisation qui est aléatoire. Pour réduire cet aléatoire, on choisit de répéter l'algorithme 15 fois (n_start=15). De plus, nous devons choisir le nombre de classes souhaité. Pour cela, nous allons utiliser deux critères de sélections : le critère de la variation de l'inertie Intra-Classe et le criteres Silhouette.
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="Des graphs pour faire le choix optimal de nombre de centre",fig.height=2.5,fig.align='center',fig.width=5}
+Silhou<-NULL
+Kmax=15
+for (k in 2:Kmax){
+   aux<-silhouette(kmeans(data_T, centers = k, nstart = 15,algorithm = "MacQueen")$cluster,dist(data_T))
+   Silhou<-c(Silhou,mean(aux[,3]))
+}
+
+#df<-data.frame(K=2:Kmax,Silhouette=Silhou)
+p1=fviz_nbclust(data_T,kmeans,method="wss")
+p2=fviz_nbclust(data_T, kmeans, method = "silhouette")
+aux<-silhouette(kmeans(data_T, centers = 2 , nstart = 1,algorithm = "MacQueen")$cluster,dist(data_T))
+p3=fviz_silhouette(aux)+theme(plot.title = element_text(size =9))
+grid.arrange(p1,p2,p3,nrow=2,ncol=2)
+```
+
+```{python,  echo=F,error=F,warning=F,message=F}
+data=r.data_T1
+
+InertieIntra = []
+for k in range(2,16):
+  kmeans = KMeans(init="random",n_clusters=k,n_init=10,max_iter=300,random_state=42);
+  kmeans.fit(data);
+  InertieIntra.append(kmeans.inertia_);
+  
+aux = pd.DataFrame({"K" : list(range(2,16)),
+                    "InertieIntra" : InertieIntra})
+fig = px.line(aux, x='K', y='InertieIntra',labels={'x':'Number of clusters', 'y':'Inertie Intra'},markers=True)
+fig.show() 
+plt.close()
+```
+
+```{python,echo=F, eval=F}
+#  
+from yellowbrick.cluster import SilhouetteVisualizer
+model = KMeans(init="random",n_clusters=2,n_init=10,max_iter=300,random_state=42);
+visualizer = SilhouetteVisualizer(model, colors='yellowbrick')
+visualizer.fit(data)     
+visualizer.show() 
+plt.close()
+```
+
+On peut observer sur le premier graphique, l'évolution du total d'inertie intra-classe. Pour choisir le nombre de classes, on regarde l'endroit où la courbe forme un coude. Ici, on trouve K=2. De plus, pour le deuxième graphique, le critère Silhouette que l'on cherche à maximiser nous donne un K = 2 classes également. Enfin, grâce au troisième graphique, nous observons que l'on a un critère Silhouette moyen de 0.71 ce qui est assez élevé. On peut donc être assez confiant sur le fait de faire un clustering à 2 classes.
+
+Observons le résultat du clustering sur les deux premiers plans de l'ACP.
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="PCA sur les individus avec les clusters de kmeans",fig.height=2.5,fig.align='center',fig.width=5}
+k2 <- kmeans(data_T, centers = 2, nstart = 2)
+fviz_pca_ind(resacp_T,habillage=as.factor(k2$cluster))
+```
+
+```{python,eval=F,echo=F}
+
+# Define the range of values for minPts and eps
+mypca = PCA(n_components=3);
+mypca.fit(data);
+dataPCA=mypca.fit_transform(data)
+eps = 1
+n_clusters = 3
+kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(w)
+
+pca_df = pd.DataFrame({
+    "Dim1" : dataPCA[:,0], 
+    "Dim2" : dataPCA[:,1],
+    "KMeans" : kmeans.labels_
+})
+sns.lmplot( x="Dim1", y="Dim2", data=pca_df, fit_reg=False, hue='KMeans', legend=True)
+plt.show()
+plt.close()
+```
+
+On peut distinguer facilement les deux cluster retenus.
+
+-Le premier cluster représente majoritairement le traitement T1 peu importe l'heure ainsi que le traitement T2 et T3 à l'heure 1h. Ceci est valable pour les deux replicats, ce qui semble logique.
+
+-le deuxième cluster représente majoritairement le traitment T2 et T3 à partir de l'heure 2h.
+
+### Classification Hiérarchique
+
+Pour la classification hiérarchique, nous avons decidé d'utiliser la mesure d'agrégation de Ward. Nous avons fait ce choix car nous avons des données quantitatives qui ont toutes le même nombre d'individu. Observons le dendogramme obtenu :
+
+```{r,echo=F,warning=FALSE,message=FALSE,results='hide',fig.cap="Dendrogramme",fig.height=2.5,fig.align='center',fig.width=5}
+hward<-hclust(dist(data_T),method='ward.D2')
+
+# Dendrogramme
+fviz_dend(hward,show_labels=FALSE)
+```
+
+```{python,echo=F,eval=F}
+hward=linkage(data,'single')
+dendrogram(hward,no_labels=True,color_threshold=0);
+plt.show()
+plt.close()
+
+```
+
+En observant le dendogramme, on voit que l'on peut choisir 2,3 ou bien 9 classes. Pour cela, nous allons utiliser le critère index.G1 afin de déterminer à quel endroit il faut couper le dendogramme pour obtenir les classes.
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="Graphs avec le nombre de classe optimal",fig.height=3,fig.align='center',fig.width=5}
+daux=NULL
+CH<-NULL
+kmax=15
+for (k in 2:kmax){
+  CH<-c(CH,index.G1(data_T,cutree(hward,k=k)))
+}
+
+daux<-data.frame(NBCluster=2:kmax,CH=CH)
+p1=ggplot(daux,aes(x=NBCluster,y=CH))+geom_line()+geom_point()
+ClustCH=cutree(hward,k=9)
+p2=fviz_dend(hward,show_labels=FALSE,k=which.max(CH)+1)
+p3=fviz_pca_ind(resacp_T,geom = c("point"),habillage=as.factor(ClustCH))
+grid.arrange(p1,p2,p3,ncol=2,nrow=2)
+```
+
+```{python,echo=F,eval=F}
+data_T=data
+kmax = 15
+CH = []
+for k in range(2, kmax+1):
+    Z = linkage(data_T, method='ward')
+    clust = fcluster(Z, k, criterion='maxclust')
+    CH.append(index_G1(data_T, clust))
+
+daux = pd.DataFrame({'NBCluster': range(2, kmax+1), 'CH': CH})
+plt.plot(daux['NBCluster'], daux['CH'])
+plt.xlabel('Number of Clusters')
+plt.ylabel('CH Index')
+plt.show()
+
+ClustCH = fcluster(Z, 9, criterion='maxclust')
+plt.figure()
+dendrogram(Z)
+plt.show()
+
+pca_df = pd.DataFrame({
+    "Dim1" : dataPCA[:,0], 
+    "Dim2" : dataPCA[:,1],
+    "Cluster" : ClustCH
+})
+
+sns.lmplot(x="Dim1", y="Dim2", data=pca_df, fit_reg=False, hue='Cluster', legend=True)
+plt.show()
+```
+
+Comme on cherche à maximiser le critère Calinski, on retient ici 9 classes. Nous comparerons ces 9 classes avec les autres résultats de clustering par la suite.
+
+### Modèle de mélange
+
+Nous allons utilser une méthode de Clustering appelée "modèle de mélange" qui consiste à considérer un jeu de données contenant plusieurs sous-populations indépendantes et ayant leur propre loi de distribution. Le jeu de données est alors vu comme un mélange de toutes ces distributions. Un point x appartiendra à la classe K uniquement si la probabilité qu'il appartienne à cette classe est plus grande que pour les autres classes.
+
+Pour réaliser cela, nous utilisons le fonction R Mclust. Nous lui demandons de tester les différents modèles allant de 2 classes à 15 classes selon le critere BIC, peu importe la forme de la classe. Voici les résultat obtenus :
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="Des graphs pour le choix du meileur modèle",fig.height=3,fig.align='center',fig.width=7}
+res<-Mclust(data_T,G=2:15)
+p1=fviz_mclust(res,what=c("BIC"))
+p2=fviz_pca_ind(resacp_T,habillage=as.factor(res$classification))
+grid.arrange(p1,p2,ncol=2,nrow=1)
+```
+
+```{python,eval=F,echo=F}
+data_T=r.data_T
+K_components = np.arange(2, 21)
+models = [GMM(K, covariance_type='diag', random_state=0).fit(data_T) for K in K_components]
+crit = pd.DataFrame({
+    "K" : np.arange(2, 21),
+    "BIC" : [m.bic(data) for m in models], 
+    "AIC" : [m.aic(data) for m in models],
+})
+critdf=pd.melt(crit, id_vars=['K'], value_vars=['BIC', 'AIC'])
+
+fig = px.line(critdf, x='K', y='value', color='variable')
+fig.show()
+
+```
+
+Par défaut Mclust utilise le critère BIC pour choisir quel est le meilleur modèle (nombre de classes et forme des distributions), il va chercher à minimiser le critère BIC dans chacun des cas. D'après le graphique, on voit que c'est un modèle avec une forme de distribution "VEI" à 3 classes qui a été retenu.
+
+Comme pour les K-means, le premier cluster contient les variables T1 à toutes les heures et les variables T2 et T3 à l'heure T1. Le deuxième cluster contient toutes les variables T2 et T3 aux heures 2h et 3h. Enfin, le dernier cluster contient toutes les variables T2 et T3 aux heures 4h, 5h et 6h.
+
+Pour confirmer nos résultats, le clustering que nous avons obtenu avec le critère BIC, nous allons utiliser un deuxième critère de sélection avec les modèles mélanges : le critère ICL.
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="Classification choisi par ICL",fig.height=2.5,fig.align='center',fig.width=5}
+resICL<-mclustICL(data_T,G=2:20)
+summary(resICL)
+resICL<-Mclust(data_T,G=3,c('EEV'))
+fviz_pca_ind(resacp_T,geom = c("point"),habillage=as.factor(resICL$classification))
+table(resICL$classification,res$classification)
+```
+
+```{python,echo=F,eval=F}
+# Modele retenu par BIC
+data=data_T
+
+U=[m.bic(data) for m in models]
+u=np.argmin(U)
+  #covariances = models[u].covariances_
+  #means = models[u].means_
+  #models[u].weights_
+
+probapost = models[u].predict_proba(data)
+labels=models[u].fit_predict(data)   
+probamax=[np.max(probapost[x,:]) for x in range(len(data))]
+
+
+
+df = pd.DataFrame({
+    "X" : data.X1, 
+    "Y" : data.X2,
+    "labels" : pd.Categorical(labels)
+})
+
+
+fig = px.scatter(df,x="X", y="Y", color="labels", symbol="labels")
+fig.show()
+
+```
+
+On voit que les critères BIC et ICL, donnent exactement le même clustering. On est donc confiant pour dire que notre clustering est plutôt "bon" dans notre situation.
+
+### Comparaison des différents clustering pour les variables 
+
+En utilisant la méthode des modèles de mélange, on trouve un cluster à 8 classes, ce qui est différent de tous les autres algorithmes de clustering où on trouve 2 classes.
+
+```{r,eval=FALSE,echo=FALSE}
+table(resICL$classification,k2$cluster)
+table(ClustCH,resICL$classification)
+table(ClustCH,k2$cluster)
+```
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="ChordDiagram",fig.height=3,fig.align='center',fig.width=5}
+k2 <- kmeans(data_T, centers = 2, nstart = 25)
+P<-pam(data_T,2)
+res.db <- dbscan::dbscan(data_T, 7, round(log(nrow(data_T))))
+#chord diagram
+set.seed(1234)
+clust4F=paste("Kmeans",k2$cluster,sep=" ")
+clust5F=paste("CA",ClustCH,sep=" ")
+clust6F=paste("Melange",resICL$classification,sep=" ")
+
+mycolor1=viridis(6,alpha = 1,begin = 0,end = 1,option = "H")
+mycolor2=viridis(6,alpha = 1,begin = 0,end = 1,option = "H")
+mycolor1=mycolor1[sample(1:4)]
+mycolor2=mycolor2[sample(1:5)]
+p1=chordDiagram(table(clust4F,clust5F))
+#p2=chordDiagram(table(clust5F,clust6F))
+#p3=chordDiagram(table(clust6F,clust4F),grid.col = mycolor2)
+```
+
+## Classification des gènes 
+
+Ici, l'objectif de cette partie est de trouver des groupes de gènes qui se comportent de la même manière au cours du temps et des différents traitements. Comme pour la partie precédente, nous avons realisé une ACP sur le jeu de données pour nous donner une idée de la "forme" de notre jeu de données. Le nombre de variables étant de 36, nous avons choisi de ne pas réduire le nombre de dimensions pour effectuer les différentes méthodes clustering.
+
+### Avec K-means 
+
+Pour commencer, nous avons utilisé une méthode de K-means. Nous allons utiliser le même procédé pour que le clustering sur les variables, c'est-à-dire un n_start=15 et une mise en place de deux méthodes(variation de l'inertie Intra-classe et Silhouette) afin de déterminer le nombre de classes optimal.
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="Choix du nombre de centre optimal",fig.height=2.5,fig.align='center',fig.width=5}
+Silhou<-NULL
+Kmax=15
+for (k in 2:Kmax){
+   aux<-silhouette(kmeans(Data, centers = k, nstart = 15,algorithm = "MacQueen")$cluster,dist(Data))
+   Silhou<-c(Silhou,mean(aux[,3]))
+}
+
+#df<-data.frame(K=2:Kmax,Silhouette=Silhou)
+p1=fviz_nbclust(Data,kmeans,method="wss")
+p2=fviz_nbclust(Data, kmeans, method = "silhouette")
+aux<-silhouette(kmeans(Data, centers = 2 , nstart = 1,algorithm = "MacQueen")$cluster,dist(Data))
+p3=fviz_silhouette(aux)+theme(plot.title = element_text(size =9))
+grid.arrange(p1,p2,p3,nrow=2,ncol=2)
+```
+
+On observe qu'avec le critère Silhouette, le nombre de classes optimal est de deux classes. De plus, d'après le deuxième graphique, on remarque qu'on est plutôt confiant sur l'appartenance des points dans les classes puisque qu'on a une moyenne du critère Silhouette de 0.7. Observons le clustering obtenue dans les deux premier plan de l'ACP :
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="ACP avec 2 classes",fig.height=3,fig.align='center',fig.width=5}
+k3 <- kmeans(Data, centers = 2, nstart = 15)
+p1 <- fviz_cluster(k3, geom = "point", data = Data,ellipse.type = "norm") + ggtitle("k = 2")
+p1
+```
+
+```{python,  echo=F,error=F,warning=F,message=F}
+data=r.Data
+
+InertieIntra = []
+for k in range(2,16):
+  kmeans = KMeans(init="random",n_clusters=k,n_init=10,max_iter=300,random_state=42);
+  kmeans.fit(data);
+  InertieIntra.append(kmeans.inertia_);
+  
+aux = pd.DataFrame({"K" : list(range(2,16)),
+                    "InertieIntra" : InertieIntra})
+fig = px.line(aux, x='K', y='InertieIntra',labels={'x':'Number of clusters', 'y':'Inertie Intra'},markers=True)
+fig.show() 
+plt.close()
+```
+
+```{python,echo=F, eval=F}
+ 
+from yellowbrick.cluster import SilhouetteVisualizer
+model = KMeans(init="random",n_clusters=5,n_init=10,max_iter=300,random_state=42);
+visualizer = SilhouetteVisualizer(model, colors='yellowbrick')
+visualizer.fit(data)     
+visualizer.show() 
+plt.close()
+```
+
+```{python,echo=F, eval=F}
+
+# Define the range of values for minPts and eps
+mypca = PCA(n_components=3);
+mypca.fit(data);
+dataPCA=mypca.fit_transform(data)
+eps = 1
+n_clusters = 5
+kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(data)
+
+pca_df = pd.DataFrame({
+    "Dim1" : dataPCA[:,0], 
+    "Dim2" : dataPCA[:,1],
+    "KMeans" : kmeans.labels_
+})
+sns.lmplot( x="Dim1", y="Dim2", data=pca_df, fit_reg=False, hue='KMeans', legend=True)
+plt.show()
+plt.close()
+```
+
+On observe que les deux classes obtenues sont les deux classes que l'on pouvait distinguer visuellement sur l'ACP donc c'est ) dire des gènes sous-exprimés pour le cluster 2 et des gènes sur-exprimés pour le cluster 1.
+
+Malgrès cela, nous pensons qu'il est préferable de choisir un nombre de classes égal à 5 car dans ce cas, nous cherchons à distinguer différents groupes de gènes. Ainsi, une classification plus "fine" semble meilleure. Mais avant de faire ce choix, observons si le clustering à 2 classes est un regroupement des classes du clustering à 5 classes. Pour cela, regardons la table des effectifs par classe suivant :
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="ChordDiagram",fig.height=3,fig.align='center',fig.width=5}
+#table(k2$cluster,k3$cluster)
+k2=kmeans(Data, centers = 5, nstart = 15)
+clust5C=paste("K=2",k3$cluster,sep=" ")
+clust2C=paste("K=5",k2$cluster,sep=" ")
+chordDiagram(table(clust5C,clust2C))
+```
+
+On voit bien que la classe 1 du clustering à deux classes contient entièrent les trois premières classes du clustering à 5 classes. De la même manière, la deuxième classe du clustering à deux classes contient les deux autres classes du clustering à 2 classes. Donc notre hypothèse de prendre 5 classes reste cohérente.
+
+Maintenant que nous avons trouvé un clustering, nous allons interpreter les différents groupes. Pour cela, nous allons tracer les profils moyens par classe aux différents instant et au différents traitements :
+
+```{r,warning=FALSE,echo=F}
+df_kmeans1 = aggregate(Data[,1:36], by=list(k2$cluster), FUN=mean)[,-1]
+df_kmeans1 = t(df_kmeans1)
+colnames(df_kmeans1) = paste("mean_K", 1:ncol(df_kmeans1) , sep="")
+
+df_kmeans1 = melt(df_kmeans1)
+colnames(df_kmeans1) = c("variable", "K", "value")
+
+p1=ggplot(df_kmeans1, aes(x=variable, y=value, group=K, colour=K)) +
+  geom_line() +
+  geom_line(aes(y=1), linetype="dotted", colour="black") +
+  geom_line(aes(y=-1), linetype="dotted", colour="black") +
+  xlab("Variables") +
+  ylab("Value") +
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1))
+k2_bis=k3
+df_kmeans = aggregate(Data[,1:36], by=list(k2_bis$cluster), FUN=mean)[,-1]
+df_kmeans = t(df_kmeans)
+colnames(df_kmeans) = paste("mean_K", 1:ncol(df_kmeans) , sep="")
+
+df_kmeans = melt(df_kmeans)
+colnames(df_kmeans) = c("variable", "K", "value")
+p2=ggplot(df_kmeans, aes(x=variable, y=value, group=K, colour=K)) +
+  geom_line() +
+  geom_line(aes(y=1), linetype="dotted", colour="black") +
+  geom_line(aes(y=-1), linetype="dotted", colour="black") +
+  xlab("Variables") +
+  ylab("Value") +
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1))
+```
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="Analyse sur les clusters obtenus",fig.height=3,fig.align='center',fig.width=5}
+grid.arrange(p1,p2,nrow=2,ncol=1)
+```
+
+On observe que :
+
+-   Le cluster K4 représente essentiellement les gènes qui sont sur-exprimés, ils ont tous une réaction rapide et fortement positive aux traitements T2 et T3.
+
+-   Le cluster K3 sont les gènes qui sont très sur-exprimés, ils ont tous une réaction assez rapide et fortement positive au traitement T2 et T3 mais avec une intensité moins forte que la classe K3.
+
+-   Le cluster K1 les gènes qui sont sur-exprimés mais avec une réaction très progressive aux traitements T2 et T3.
+
+-   Le cluster K5 défini les gènes sous-exprimés. Ils ont tous une réaction progressive et négative.
+
+-   Enfin, pour le cluster K2, les gènes qui sont tres sous-exprimés. Ils ont tous une réaction rapide et fortement négative aux traitements T2 et T3.
+
+De plus, on remarque que le clustering obtenu classe les gènes de la même façon entre le réplicat R1 et le réplicat R2, ce qui nous conforte dans l'idée qu'il existe un lien fort entre les gènes d'une même classe. Cependant, on observe le clustering différentie uniquement les gènes sur les traitements T2 et T3. Nous allons donc réaliser un clustering complémentaire uniquement sur les données du traitement T1.
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.height=3,fig.align='center',fig.width=5}
+Silhou<-NULL
+Kmax=15
+for (k in 2:Kmax){
+   aux<-silhouette(kmeans(Data[,1:6], centers = k, nstart = 15,algorithm = "MacQueen")$cluster,dist(Data))
+   Silhou<-c(Silhou,mean(aux[,3]))
+}
+
+#df<-data.frame(K=2:Kmax,Silhouette=Silhou)
+p1=fviz_nbclust(Data[,1:6],kmeans,method="wss")
+p2=fviz_nbclust(Data[,1:6], kmeans, method = "silhouette")
+aux<-silhouette(kmeans(Data[,1:6], centers = 5 , nstart = 15,algorithm = "MacQueen")$cluster,dist(Data[,1:6]))
+aux<-silhouette(kmeans(Data[,1:6], centers = 3 , nstart = 15,algorithm = "MacQueen")$cluster,dist(Data[,1:6]))
+p4=fviz_silhouette(aux)+theme(plot.title = element_text(size =9))
+
+grid.arrange(p2,p4,nrow=1,ncol=2)
+```
+
+On observe qu'avec le critère Silhouette, on prend 3 classes. De plus, les classes ont un nombre d'effectif très différent : K1 a 109 individus, K2 a 1362 individus et K3 en a 144.
+
+Nous allons tracer les profils moyens par classe aux différents instants et aux différents traitements afin de mieux visualiser le rôle de chaque cluster.
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.height=2,fig.align='center',fig.width=5}
+k20=kmeans(Data[,1:6], centers = 3 , nstart = 15)
+df_kmeans1 = aggregate(Data[,1:6], by=list(k20$cluster), FUN=mean)[,-1]
+df_kmeans1 = t(df_kmeans1)
+colnames(df_kmeans1) = paste("mean_K", 1:ncol(df_kmeans1) , sep="")
+
+df_kmeans1 = melt(df_kmeans1)
+colnames(df_kmeans1) = c("variable", "K", "value")
+
+p1=ggplot(df_kmeans1, aes(x=variable, y=value, group=K, colour=K)) +
+  geom_line() +
+  geom_line(aes(y=1), linetype="dotted", colour="black") +
+  geom_line(aes(y=-1), linetype="dotted", colour="black") +
+  xlab("Variables") +
+  ylab("Value") +
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1))
+
+p1
+```
+
+On observe donc qu'il y a bien 3 clusters assez différents.
+
+-   Le cluster K1 a tendance à réagir positivement rapidement puis à rester constant pour finalement retomber à une valeur proche de 0.
+
+-   Le cluster K2 a tendance à reagir négativement et de manière plus progressive que le cluster K1 pour finalement retomber à partir de 4h.
+
+-   Le cluster K5 contient tous les gènes qui ne réagissent pas au traitement T1.
+
+### Avec la Classification Hiérarchique 
+
+Nous allons maintenant utiliser la classification hiérarchique pour essayer de retrouver le clustering précédent ou un nouveau clustering qui nous permettrai d'obtenir plus d'informations. Au vu du jeu de données, on choisit de prendre une distance Euclidienne et une méthode de Ward.
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="Dendrogramme",fig.height=3,fig.align='center',fig.width=5}
+hward2<-hclust(dist(Data[,1:18]),method='ward.D2')
+
+```
+
+Il nous faut donc maintenant choisir un critère afin de savoir où le dendogramme (ce qui correspond au nombre de classes retenu) pour obtenir notre clustering. Pour cela, nous utilisons le critere "index.G1" que nous allons chercher à maximiser. Visuellement, on remarque que le nombre de classes optimal va se situer entre 2 et 10 classes.
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="Le nombre de classe optimal",fig.height=3,fig.align='center',fig.width=5}
+daux=NULL
+CH<-NULL
+Kmax=10
+for (k in 2:Kmax){
+  CH<-c(CH,index.G1(Data[,1:18],cutree(hward2,k=k)))
+}
+daux<-data.frame(NBCluster=2:Kmax,CH=CH)
+p1=ggplot(daux,aes(x=NBCluster,y=CH))+geom_line()+geom_point()
+ClustCH=cutree(hward2,k=2)
+p2=fviz_dend(hward2,show_labels=FALSE,k=which.max(CH)+1)
+p3=fviz_pca_ind(PCA(Data[,1:18],graph = F),geom = c("point"),habillage=as.factor(ClustCH))
+grid.arrange(p1,p2,p3,nrow=2,ncol=2)
+```
+
+### Avec les modèles de mélange 
+
+Enfin, nous allons utliser les modèles de mélange. Au vu des premiers clusterings et de la taille du jeu de données, nous allons limiter notre recherche de classes entre 2 et 15 classes mais on essaie toutes les formes de classe possible. Pour la sélection du nombre de classes, nous allons utiliser le citère BIC dans un premier temps, puis le critère ICL. Nous décidons de ne pas inclure les résultats du critère AIC dans le rapport car les résultats ne menaient à rien.
+
+```{r,echo=F}
+res<-Mclust(Data[,1:18],G=2:15)
+```
+
+On remarque que l'on obtient un clustering VVE à 11 classes.
+
+```{r,echo=F}
+p1=fviz_mclust(res,what=c("BIC"))
+p2=fviz_mclust(res,what=c("classification"),geom=c('point'))
+```
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE,results='hide',fig.cap="Analyse sur le le modèle optimal",fig.height=6,fig.align='center',fig.width=10}
+Aux<-data.frame(label=as.factor(res$classification),    proba=apply(res$z,1,max))
+p3=ggplot(Aux,aes(x=label,y=proba))+geom_boxplot()
+grid.arrange(p1,p2,p3,ncol=2,nrow=2)
+```
+
+```{r,echo=F,eval=F}
+adjustedRandIndex(k2$cluster,P$clustering)
+adjustedRandIndex(res.db$cluster,P$clustering)
+adjustedRandIndex(res.db$cluster,k2$cluster)
+table(k2$cluster,P$clustering)
+table(res.db$cluster,P$clustering)
+table(res.db$cluster,k2$cluster)
+```
+
+On obtient deux classes qui sont à chaque fois quasiment identiques.
+
+# Modélisation
+## Etude de l'expression des gènes pour le traitement T3 à 6h 
+
+### Etude de l'expression des gènes pour le traitement T3 à 6h en fonction des autres expressions des gènes pour le traitement T3 :
+
+On commence par modéliser l'expression des gènes pour le traitement T3 à 6h par les différents temps pour le traitement T3 fixé en réalisant une régression linéaire multiple.
+
+$$
+\left\{\begin{array}{l} T3\_6h\_R2_{i}= \theta_0 + \theta_1 *T3\_1h\_R2_{i} + \dots+\theta_5*T3\_5h\_R2_{i}+\varepsilon_{i},\ \
+i=1,\ldots,k=5\\ (\varepsilon_{i}) \textrm{ i.i.d
+}\mathcal{N}(0,\sigma^2) \end{array}\right. 
+$$
+
+D'abord, on commence par vérifier les 4 hypothèses: $H1$: les $\varepsilon_{i}$ sont : - centrées, - de variance constante, - indépendantes, - suivent une loi normale.
+
+```{r,echo=F,fig.width=5,fig.height=2.5,fig.align='center',fig.show='hold',cache=FALSE,fig.cap="Graphiques de vérifications des hypothèses sur les erreurs"}
+modcomplet1=lm(T3_6h_R2~.,data=Data[,31:36])
+
+#ggplot(data = Data,aes(T3_6h_R2))+geom_histogram()
+autoplot(modcomplet1,which=c(1,2,3,4),label.size=2)     
+```
+
+Les hypothèses précédentes sont validées. De plus, on a le modèle complet pour l'expression des gènes à 6h pour le traitement T3 fixé ci-dessous :
+
+```{r,echo=F,results='asis'}
+tidy_fit <- tidy(modcomplet1)
+
+# Keep only the columns for the coefficients and p-values
+tidy_fit_reduced <- tidy_fit[,c("term", "estimate", "p.value")]
+
+# Use kable to display the reduced summary
+kable(tidy_fit_reduced, caption = "Reduced Summary of Linear Model")
+```
+
+```{python,echo=F,eval=F}
+data=datapy.loc[:,['T{}_{}h_R2'.format(j,i) for i in range(1,7) for j in range(1,4)]]
+
+list_var=data.columns.drop("T3_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T3_6h_R2)
+regmultipy = sm.OLS(y, X)
+mod_compT3 = regmultipy.fit()
+print(mod_compT3.summary())
+```
+
+On remarque grâce aux p-valeurs des tests de Student (voir sorties dans le Rmd) qu'aucune des variables du modèle complet ne peuvent être supprimée avec une erreur à 5%.
+
+### Etude de l'expression des gènes pour le traitement T3 à 6h en fonction des autres expressions des gènes pour tous les traitements :
+
+Maintenant, nous allons modéliser l'expression des gènes pour le traitement T3 à 6h par les différents temps les différents traitements par une regréssion linéaire multiple.
+
+
+$$
+\left\{\begin{array}{l} T3\_6h\_R2_{i}= \theta_0 + \theta_1 *T1\_1h\_R2_{i} + \dots+\theta_15*T3\_5h\_R2_{i}+\varepsilon_{i},\ \
+i=1,\ldots,k=15\\ (\varepsilon_{i}) \textrm{ i.i.d
+}\mathcal{N}(0,\sigma^2) \end{array}\right. 
+$$
+
+```{r,echo=FALSE,fig.width=5,fig.height=2.5,fig.align='center',fig.show='hide'}
+modcomplet2=lm(T3_6h_R2~.,data=Data[,19:36])
+
+autoplot(modcomplet2,which=c(1,2,4),label.size=2)  
+#ggplot(data = Data,aes(T3_6h_R2))+geom_histogram()
+
+```
+
+De même que précédemment, les hypothèses sont vérifiées (les $\varepsilon_{i}$ sont centrés, de variance constante, indépendants et suivent une loi normale).
+
+```{r,echo=FALSE}
+tidy_fit <- tidy(modcomplet2)
+
+# Keep only the columns for the coefficients and p-values
+tidy_fit_reduced <- tidy_fit[,c("term", "estimate", "p.value")]
+
+# Use kable to display the reduced summary
+kable(tidy_fit_reduced, caption = "Summary of Linear Model")
+```
+
+```{python,echo=F,eval=F}
+data=datapy.loc[:,['T{}_{}h_R2'.format(j,i) for i in range(1,7) for j in range(1,4)]]
+
+list_var=data.columns.drop("T3_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T3_6h_R2)
+regmultipy = sm.OLS(y, X)
+mod_compT3 = regmultipy.fit()
+print(mod_compT3.summary())
+```
+
+Puisque le modèle complet présente plusieurs variables qui peuvent être supprimées avec une erreur de 5% (qui on une p-valeur \> 0.05), on peut simplifier le modèle. Cependant, puisque plusieurs d'entre-elles peuvent être annulées, nous avons utilisé des procédures de choix de modèles pour sélectionner les variables significatives. On va ici comparer la sélection de variable obtenue par différents critères : BIC, AIC et Cp de Mallows.
+
+La méthode backward consiste à commencer avec toutes les variables et à les supprimer une à une. La méthode forward consiste à commencer avec une seule variable et à ajouter progressivement des variables supplémentaires.
+
+Les deux méthodes peuvent être utilisées pour sélectionner les variables les plus pertinentes et sont équivalentes dans notre cas. Nous avons donc choisi pour la suite la méthode backward. 
+
+Pour les méthodes de sélection de variables, nous avons utilisé la méthode bic, aic et le Cp de Mallows.
+
+```{r,eval=F,echo=F,results='hide',fig.align='center',fig.width=8,fig.height=3.5,fig.show='hold',cache=FALSE,fig.cap="Selection des variables avec critère CP et BIC"}
+
+choix<-regsubsets(T3_6h_R2~.,nbest=1,nvmax=18,data=Data[,19:36],method="backward")
+par(mfrow=c(1,2))
+p1=plot(choix,scale="bic")
+p2=plot(choix,scale = "Cp")
+```
+
+```{r,echo=F,results='hide'}
+#modèle cp et adjr2 sont les memes
+mod_cp=lm(T3_6h_R2~T1_1h_R2+T1_3h_R2+ T1_5h_R2 +T1_6h_R2 + T2_1h_R2 + T2_3h_R2 + T2_5h_R2 + T2_6h_R2+ T3_3h_R2+ T3_4h_R2 + T3_5h_R2, data = Data[,19:36])
+summary(mod_cp)
+
+```
+
+```{python, echo=F, eval=F}
+data=datapy.loc[:,['T1_1h_R2','T1_3h_R2','T1_5h_R2' ,'T1_6h_R2' , 
+                 'T2_1h_R2' , 'T2_3h_R2' , 'T2_5h_R2' , 'T2_6h_R2', 
+                 'T3_3h_R2' , 'T3_4h_R2' , 'T3_5h_R2', 'T3_6h_R2']]
+list_var=data.columns.drop("T3_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T3_6h_R2)
+regmultipy = sm.OLS(y, X)
+modT3_cp = regmultipy.fit()
+print(modT3_cp.summary())
+```
+
+```{r,echo=F,results='hide'}
+mod_bic=lm(T3_6h_R2~T1_1h_R2+T1_3h_R2+ T1_5h_R2 +T1_6h_R2 + T2_1h_R2 + T2_3h_R2 + T2_5h_R2 + T2_6h_R2+ T3_5h_R2, data = Data[,19:36])
+summary(mod_bic)
+```
+
+```{python, eval=F, echo=F}
+#modèle selectionné par bic :
+data=datapy.loc[:,['T1_1h_R2','T1_3h_R2', 'T1_5h_R2' ,'T1_6h_R2' , 'T2_1h_R2', 'T2_3h_R2' 
+                 , 'T2_5h_R2' , 'T2_6h_R2','T3_5h_R2', 'T3_6h_R2']]
+list_var=data.columns.drop("T3_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T3_6h_R2)
+regmultipy = sm.OLS(y, X)
+modT3_bic = regmultipy.fit()
+print(modT3_bic.summary())
+```
+
+```{r,echo=F,results='hide',fig.show='hold',cache=FALSE,fig.cap=" les résultats aprés la selection des variables avec AIC"}
+#stepAIC(modcomplet2,direction = "backward")
+m=step(modcomplet2,direction = "backward",trace = FALSE)
+summary(m)
+```
+
+```{r,echo=F,results='hide'}
+mod_aic=lm(T3_6h_R2 ~ T1_1h_R2 + T1_3h_R2 + T1_5h_R2 + T1_6h_R2 + 
+    T2_1h_R2 + T2_3h_R2 + T2_5h_R2 + T2_6h_R2 + T3_3h_R2 + T3_4h_R2 + 
+    T3_5h_R2, data = Data[,19:36])
+
+```
+
+```{r,echo=FALSE}
+tidy_fit_cp <- tidy(mod_cp)
+tidy_fit_bic <- tidy(mod_bic)
+tidy_fit_aic <- tidy(mod_aic)
+
+# Keep only the columns for the coefficients and p-values
+tidy_fit_cp <- tidy_fit_cp[,c("term", "estimate", "p.value")]
+tidy_fit_bic <- tidy_fit_bic[,c("term", "estimate", "p.value")]
+tidy_fit_aic <- tidy_fit_aic[,c("term", "estimate", "p.value")]
+
+# Use kable to display the reduced summary
+t_cp=kable(tidy_fit_cp, caption = "Variable selectionnées avec CP")
+t_bic=kable(tidy_fit_bic, caption = "Variable selectionnées avec BIC")
+t_aic=kable(tidy_fit_aic, caption = "Variable selectionnées avec AIC")
+t_cp
+t_bic
+t_aic
+
+```
+
+```{r,echo=F,results='hide'}
+mod_aic=lm(formula = T3_6h_R2 ~ T1_1h_R2 + T1_3h_R2 + T1_5h_R2 + T1_6h_R2 + 
+    T2_1h_R2 + T2_3h_R2 + T2_5h_R2 + T2_6h_R2 + T3_3h_R2 + T3_4h_R2 + 
+    T3_5h_R2, data = Data[, 19:36])
+summary(mod_aic)
+```
+
+```{python, eval=F, echo=F}
+#modèle selectionné par aic :
+data=datapy.loc[:,['T1_1h_R2','T1_3h_R2','T1_5h_R2' ,'T1_6h_R2' , 
+                 'T2_1h_R2' , 'T2_3h_R2' , 'T2_5h_R2' , 'T2_6h_R2', 
+                 'T3_3h_R2' , 'T3_4h_R2' , 'T3_5h_R2', 'T3_6h_R2']]
+list_var=data.columns.drop("T3_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T3_6h_R2)
+regmultipy = sm.OLS(y, X)
+modT3_aic = regmultipy.fit()
+print(modT3_aic.summary())
+```
+
+On a déduit 3 nouveaux sous modèles. On a le même modèle en utilisant AIC et CP. On va comparer maintenant les sous-modèles obtenus par BIC et AIC avec le modèle de base en effectuant des tests de Fisher (le modèle obtenu par BIC est un sous modèle de celui obtenu par AIC) :
+
+```{r,echo=F,results='hide',fig.show='hold',cache=FALSE,fig.cap="Test de Fisher sur chaque modèle retenu"}
+a1=anova(mod_bic,modcomplet2)
+a2=anova(mod_aic,modcomplet2)
+a3=anova(mod_bic,mod_aic)
+```
+
+Le tableau suivant résume les résultats des tests qui ont été faits :
+
+```{r,echo=FALSE}
+test=c("AIC_vs_Complet","BIC_vs_AIC","BIC_vs_Complet")
+p1=format(a2[2, "Pr(>F)"], scientific = TRUE)
+p2=format(a3[2, "Pr(>F)"], scientific = TRUE)
+p3=format(a1[2, "Pr(>F)"], scientific = TRUE)
+p_value=c(p1,p2,p3)
+t=data.frame(test=test,p_value=p_value)
+kable(t)
+```
+
+```{python,eval=F,echo=F}
+anova_lm(modT3_bic,mod_compT3)
+anova_lm(modT3_aic,mod_compT3)
+anova_lm(modT3_bic,modT3_aic)
+```
+
+On fait un test de fisher de sous-modèle entre le modèle BIC et le modèle complet. On a une p-valeur = 0.2798, donc on accepte le modèle obtenu par BIC.
+
+$$
+\left\{\begin{array}{l} T3\_6h\_R2_{i}= \theta_0 + \theta_1 *T1\_1h\_R2_{i} + \theta_2 *T1\_3h\_R2_{i}+ \theta_3 *T1\_5h\_R2_{i}+ \theta_4 *T1\_6h\_R2_{i}+ \theta_5 *T2\_1h\_R2_{i}\\ + \theta_6 *T2\_3h\_R2_{i}+ \theta_7 *T2\_5h\_R2_{i}+ \theta_8 *T2\_6h\_R2_{i}+ \theta_9 *T3\_5h\_R2_{i}+\varepsilon_{i},\ \
+i=1,\ldots,k=9\\ (\varepsilon_{i}) \textrm{ i.i.d
+}\mathcal{N}(0,\sigma^2) \end{array}\right.
+$$
+
+Par un test de fisher entre le modèle AIC et le modèle complet, on a accepte le modèle AIC. Finalement, en comparant BIC avec AIC, on trouve une p-valeur égale à 0.1132. Ainsi, on accepte le modèle obtenu par BIC.
+
+## Modèle linéaire généralisé pour T3 à 6h
+
+On remarque que pour $T3_6h_R2$ les gènes sont soit sur-exprimés soit sous-exprimés, ce qui est en accord avec les résultats trouvés dans les statistiques descriptives. Donc on va voir si une régression logistique peut bien expliquer cette variable.
+
+D'abord, on change T3_6h_R2 d'une variable quantitative à une variable binaire qui prend 1 lorsque le gène est sur-exprimé sinon c'est 0. Cette dernière va suivre une loi binomiale donc pour la suite, on va utiliser une régression logistique. En effet, lorsque les variables dans une régression logistique sont corrélées, cela peut causer un phénomène connu sous le nom de "multicollinéarité". Cela se produit lorsque deux ou plusieurs variables indépendantes dans un modèle de régression sont fortement corrélées entre elles. Cela peut poser des problèmes pour estimer les coefficients de régression et il peut également être difficile de déterminer lesquelles des variables ont réellement un effet sur le résultat. Dans le cas de la multicollinéarité, l'estimation des coefficients de régression devient instable et l'algorithme peut ne pas converger. Une façon de résoudre ce problème est de retirer une des variables corrélées du modèle ou d'utiliser une forme différente de régularisation. On peut également utiliser une autre méthode qui consiste à utiliser l'ACP pour extraire des composantes non corrélées des variables corrélées, et d'utiliser ces composantes non corrélées en tant qu'entrée pour le modèle de régression logistique.
+
+### Première méthode 
+
+On enlève toutes les variables corrélés avec T3_6h_R2. Donc on va l'exprimer avec que le traitment T1 avec et sans interaction.
+
+```{r,echo=FALSE,message=FALSE,fig.show='hold',cache=FALSE,fig.cap="Selection de variable avec Lasso",fig.height=2.5,fig.width=5}
+
+df=Data[,19:36]
+df=df[,-c(7,8,9,10,11,12,13,14,15,16,17)]
+df$T3_6h_R2 <- ifelse(df$T3_6h_R2 > 1, 1, 0)
+df$T3_6h_R2=as.factor(df$T3_6h_R2)
+#tmp=as.data.frame(res.acp$x[,19:36])
+#df[,1:17]=tmp[,1:17]
+df_copy=df
+
+train_data <- df[1:round(nrow(df)*0.8),]
+test_data <- df[(round(nrow(df)*0.8)+1):nrow(df),]
+
+x_train <- model.matrix(~.,data=train_data[,-7])
+y_train <- train_data[,7]
+lambdaseq=seq(from=0,to=1,by=0.001)
+
+fittt=glmnet(x_train, y_train, family="binomial", alpha = 1)
+fit <- cv.glmnet(x_train, y_train, family="binomial", alpha = 1,lambda = lambdaseq)
+
+
+
+df=data.frame(lambda = rep(fittt$lambda,ncol(x_train)), theta=as.vector(t(fittt$beta)),variable=rep(colnames(x_train),each=length(fittt$lambda)))
+g3 = ggplot(df,aes(x=lambda,y=theta,col=variable))+
+  geom_line()+
+  theme(legend.position="bottom")+
+  scale_x_log10()
+
+
+best_lambda <-fit$lambda.min
+lambda1se <- fit$lambda.1se
+
+g3=g3 + 
+  geom_vline(xintercept = best_lambda,linetype="dotted", color = "red")+
+  geom_vline(xintercept = lambda1se,linetype="dotted", color = "blue")+
+  scale_x_log10()
+g3
+
+```
+
+```{r,echo=F }
+df=df_copy
+x_test <- model.matrix(~.,data=test_data[,-7])
+y_test <-test_data[,7,drop=FALSE]
+
+predictions <- predict(fit, newx=x_test,type="response")
+mean(as.numeric(predictions>0.5)!=y_test)
+predictions=round(predictions)
+predictions=as.data.frame(predictions)
+predictions$lambda.1se=as.factor(predictions$lambda.1se)
+#confusionMatrix(predictions$lambda.1se,y_test$T3_6h_R2)
+
+cross_table <- table(predictions$lambda.1se,y_test$T3_6h_R2)
+cross_table
+
+
+accuracy <- sum(diag(cross_table)) / sum(cross_table)
+accuracy
+```
+
+On trouve 20% de risque d'erreur et donc une accurance de 80%.
+On va tester le modèle avec intéraction.
+
+```{r,echo=FALSE,message=FALSE,fig.show='hide',cache=FALSE,fig.cap="Selection des varaibles avec Lasso",fig.height=3,fig.align=5}
+
+df=Data[,19:36]
+df=df[,-c(7,8,9,10,11,12,13,14,15,16,17)]
+df$T3_6h_R2 <- ifelse(df$T3_6h_R2 > 1, 1, 0)
+df$T3_6h_R2=as.factor(df$T3_6h_R2)
+#tmp=as.data.frame(res.acp$x[,19:36])
+#df[,1:17]=tmp[,1:17]
+df_copy=df
+
+train_data <- df[1:round(nrow(df)*0.8),]
+test_data <- df[(round(nrow(df)*0.8)+1):nrow(df),]
+
+x_train <- model.matrix(~.^2-1,data=train_data[,-7])
+y_train <- train_data[,7]
+lambdaseq=seq(from=0,to=1,by=0.001)
+
+fittt=glmnet(x_train, y_train, family="binomial", alpha = 1)
+fit <- cv.glmnet(x_train, y_train, family="binomial", alpha = 1,lambda = lambdaseq)
+
+
+
+df=data.frame(lambda = rep(fittt$lambda,ncol(x_train)), theta=as.vector(t(fittt$beta)),variable=rep(colnames(x_train),each=length(fittt$lambda)))
+g3 = ggplot(df,aes(x=lambda,y=theta,col=variable))+
+  geom_line()+
+  theme(legend.position="bottom")+
+  scale_x_log10()
+
+
+best_lambda <-fit$lambda.min
+lambda1se <- fit$lambda.1se
+
+g3=g3 + 
+  geom_vline(xintercept = best_lambda,linetype="dotted", color = "red")+
+  geom_vline(xintercept = lambda1se,linetype="dotted", color = "blue")+
+  scale_x_log10()
+g3
+
+```
+
+```{r,message=FALSE,echo=F,results='hide'}
+df=df_copy
+x_test <- model.matrix(~.^2-1,data=test_data[,-7])
+y_test <-test_data[,7,drop=FALSE]
+predictions <- predict(fit, newx=x_test,type="response")
+mean(as.numeric(predictions>0.5)!=y_test)
+predictions=round(predictions)
+predictions=as.data.frame(predictions)
+predictions$lambda.1se=as.factor(predictions$lambda.1se)
+confusionMatrix(predictions$lambda.1se,y_test$T3_6h_R2)
+```
+
+```{r,echo=F,results='hide'}
+modellogitinter = glm(T3_6h_R2 ~ .^2,data=df, family=binomial(link="logit"))
+pseudoR12 = 1-modellogitinter$deviance/ modellogitinter$null.deviance
+```
+
+```{r,echo=F,results='hide'}
+modellogit = glm(T3_6h_R2 ~ .,data=df, family=binomial(link="logit"))
+pseudoR22 = 1-modellogit$deviance/ modellogit$null.deviance
+
+d=data.frame(Nom_modèle=c("modèle avec intéraction","modèle sans intéraction"),Pseudo_R2=c(pseudoR12,pseudoR22))
+kable(d)
+```
+
+```{r,echo=F}
+anova(modellogit,modellogitinter,test = "Chisq")
+```
+
+On a également testé le modèle avec interactions et on a trouvé sensiblement les mêmes résultats. On a aussi un pseudo R² plus élevé pour le modèle avec interaction. De plus, nous avons réalisé un test de sous-modèle entre celui avec interactions et sans interactions. On trouve une p-valeur<<0.05. Donc on va garder le modèle avec intéractions. On remarque aussi qu'on peut enlever quelques interactions grâce au Z-test.
+
+```{r,echo=FALSE,eval=FALSE,fig.show='hold',cache=FALSE,fig.cap="Selection de variable avec CP"}
+fit <- regsubsets(df[,1:6], df$T3_6h_R2, method = "backward", nvmax = ncol(df[,1:6]))
+plot(fit, scale = "Cp", main = "Logistic Regression Subset Selection")
+```
+
+```{r,echo=FALSE,eval=F,results='hide'}
+modelbest= glm(T3_6h_R2 ~ T1_1h_R2+T1_2h_R2+T1_3h_R2+T1_4h_R2+T1_6h_R2,data=df, family=binomial(link="logit"))
+summary(modelbest)
+pseudoR2 = 1-modelbest$deviance/ modelbest$null.deviance
+pseudoR2
+```
+
+```{r,eval=F,echo=F }
+anova(modelbest,modellogit,test="Chisq")
+```
+
+La régression logistique ne fontionne que lorsqu'on prend que T1 et on arrive à exprimer et prédire T3_6h_R2.
+
+### Deuxième méthode 
+
+On garde toutes les variables et on utilise une sélection de variables avec la régression Lasso et on trouve les résultats suivant :
+
+```{r,echo=F }
+df=Data[,19:36]
+df$T3_6h_R2 <- ifelse(df$T3_6h_R2 > 1, 1, 0)
+df$T3_6h_R2=as.factor(df$T3_6h_R2)
+# Prepare the data
+x <- as.matrix(df[, 1:17])
+y <- df[, 18]
+fit_lasso <- glmnet(x, y, family = "binomial", alpha = 1, lambda = 0.1)
+d=data.frame(Selected_Variables=c("T2_6h_R2","T3_4h_R2","T3_5h_R2"))
+kable(d)
+```
+
+```{r,echo=F }
+# Load data
+data = df
+
+data <- na.omit(data)
+
+
+pihat<-predict(fit_lasso,as.matrix(data[,1:17]),type="response")
+
+df1<-data.frame(df[,1:17],pihat=pihat,
+         Yihat= round(pihat) ,
+         Yi=as.numeric(df$T3_6h_R2)-1)
+
+
+df1$s0.1=as.factor(df1$s0.1)
+
+confusionMatrix(df1$s0.1,df$T3_6h_R2)
+```
+
+On a une précision de 100% et on a un pseudo-R²=1 ce qui veut dire qu'on est dans le cas de overfitting. Donc ce modèle n'est pas très adapté pour prédire T3_6h_R2. Les variables sont trop corrélées.
+
+```{r,echo=FALSE,eval=FALSE}
+model2= glm(T3_6h_R2 ~ T2_6h_R2+T3_4h_R2+T3_5h_R2,data=df, family=binomial(link="logit"))
+summary(model2)
+pseudoR2 = 1-model2$deviance/ model2$null.deviance
+pseudoR2
+```
+
+### 3-ème méthode
+
+On utilise les données obtenus de l'ACP pour essayer d'éviter le problème de correlation entre les variables.
+
+```{r,echo=FALSE}
+
+df=Data[,19:36]
+df$T3_6h_R2 <- ifelse(df$T3_6h_R2 > 1, 1, 0)
+df$T3_6h_R2=as.factor(df$T3_6h_R2)
+tmp=as.data.frame(res.acp$x[,19:35])
+df[,1:17]=tmp[,1:17]
+
+
+```
+
+```{r,echo=FALSE}
+modellogit=glm(T3_6h_R2 ~. , data=df, family=binomial(link="logit"))
+pseudoR2 = 1-modellogit$deviance/ modellogit$null.deviance
+pseudoR2
+```
+
+On a un pseudo R² trop faible donc on peut déduire que ce n'est pas un bon modèle pour expliquer la variable T3_6h_R2.
+
+Conclusion: Le meilleur choix est de ne garder que le traitement T1 pour prédire T3.
+
+## Etude de l'expression des gènes pour le traitement T1 à 6h 
+
+On procède de même façon en commençant par modéliser l'expression des gènes pour le traitement T1 à 6h par les différents temps pour le traitement T1 fixé. On effectue une regréssion linéaire multiple.
+
+$$
+\left\{\begin{array}{l} T1\_6h\_R2_{i}= \theta_0 + \theta_1 *T1\_1h\_R2_{i} + \dots+\theta_5*T1\_5h\_R2_{i}+\varepsilon_{i},\ \
+i=1,\ldots,k=5\\ (\varepsilon_{i}) \textrm{ i.i.d
+}\mathcal{N}(0,\sigma^2) \end{array}\right. 
+$$
+
+```{r,echo=F,eval=F}
+modcomplet_T1=lm(T1_6h_R2~.,data = Data[,19:24])
+summary(modcomplet_T1)
+```
+
+```{python, echo=F, eval=F}
+data=datapy.loc[:,['T1_{}h_R2'.format(i) for i in range(1,7)]]
+
+list_var=data.columns.drop("T1_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T1_6h_R2)
+regmultipy = sm.OLS(y, X)
+mod_compT1_T1 = regmultipy.fit()
+print(mod_compT1_T1 .summary())
+```
+
+Après avoir effectué des tests de nullité, on déduit le modèle suivant :
+
+```{r,echo=F}
+mod_reduit_t1=lm(T1_6h_R2~T1_2h_R2+ T1_3h_R2 +T1_4h_R2 + T1_5h_R2, data = Data[,19:24])
+tidy_fit <- tidy(mod_reduit_t1)
+
+# Keep only the columns for the coefficients and p-values
+tidy_fit_reduced <- tidy_fit[,c("term", "estimate", "p.value")]
+
+# Use kable to display the reduced summary
+kable(tidy_fit_reduced, caption = "Selected variables of Linear Model")
+```
+
+```{python, eval=F, echo=F}
+#modèle réduit T1 (par test de student):
+data=datapy.loc[:,['T1_2h_R2','T1_3h_R2','T1_4h_R2','T1_5h_R2','T1_6h_R2']]
+list_var=data.columns.drop("T1_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T1_6h_R2)
+regmultipy = sm.OLS(y, X)
+modT1_reduit = regmultipy.fit()
+print(modT1_reduit.summary())
+```
+
+```{r,echo=F,eval=FALSE}
+anova(mod_reduit_t1,modcomplet_T1)
+```
+
+```{python, eval=F, echo=F}
+# On va le comparer au modèle complet en effectuant un test de Fisher
+anova_lm(modT1_reduit,mod_compT1_T1)
+```
+
+### Etude de l'expression des gènes pour le traitement T1 à 6h en fonction des autres expressions des gènes pour tous les traitements 
+
+Maintenant on va modéliser l'expression des gènes pour le traitement T1 à 6h par les différents temps pour les différents traitements.
+
+$$
+\left\{\begin{array}{l} T1\_6h\_R2_{i}= \theta_0 + \theta_1 *T1\_1h\_R2_{i} + \dots+\theta_15*T3\_5h\_R2_{i}+\varepsilon_{i},\ \
+i=1,\ldots,k=15\\ (\varepsilon_{i}) \textrm{ i.i.d
+}\mathcal{N}(0,\sigma^2) \end{array}\right. 
+$$
+
+```{r,echo=F}
+mod_T1=lm(T1_6h_R2~.,data=Data[,19:36])
+
+tidy_fit <- tidy(mod_T1)
+
+# Keep only the columns for the coefficients and p-values
+tidy_fit_reduced <- tidy_fit[,c("term", "estimate", "p.value")]
+
+# Use kable to display the reduced summary
+kable(tidy_fit_reduced, caption = "Selected variables of Linear Model")
+```
+
+```{python, eval=F, echo=F}
+data=datapy.loc[:,['T{}_{}h_R2'.format(j,i) for i in range(1,7) for j in range(1,4)]]
+
+list_var=data.columns.drop("T1_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T1_6h_R2)
+regmultipy = sm.OLS(y, X)
+mod_compT1 = regmultipy.fit()
+print(mod_compT1.summary())
+```
+
+```{r,eval=F,echo=F,fig.align='center',fig.height=3.5,fig.width=8}
+
+choix<-regsubsets(T1_6h_R2~.,nbest=1,nvmax=18,data=Data[,19:36],method="backward")
+par(mfrow=c(1,2))
+plot(choix,scale="bic")
+plot(choix,scale="Cp")
+
+```
+
+```{r,eval=F,echo=F}
+mod_bic_T1=lm(T1_6h_R2~T1_1h_R2+T1_2h_R2+ T1_3h_R2 + T1_4h_R2 + T1_5h_R2 + T2_1h_R2+ T2_2h_R2 + T2_3h_R2 + T2_6h_R2 + T3_1h_R2 + T3_5h_R2+ T3_6h_R2 , data = Data[,19:36])
+summary(mod_bic_T1)
+```
+
+```{python, eval=F, echo=F}
+#modèle selectionné par bic :
+data=datapy.loc[:,['T1_1h_R2' , 'T1_2h_R2' , 'T1_3h_R2' , 'T1_4h_R2' , 
+    'T1_5h_R2' , 'T2_1h_R2' , 'T2_2h_R2' , 'T2_3h_R2' , 'T2_6h_R2' , 'T3_1h_R2' , 
+    'T3_5h_R2' , 'T3_6h_R2', 'T1_6h_R2' ]]
+list_var=data.columns.drop("T1_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T1_6h_R2)
+regmultipy = sm.OLS(y, X)
+modT1_bic = regmultipy.fit()
+print(modT1_bic.summary()) 
+```
+
+```{r,echo=F,eval=F}
+mod_cp_T1=lm(T1_6h_R2~T1_1h_R2 + T1_2h_R2 + T1_3h_R2 + T1_4h_R2 + 
+    T1_5h_R2 + T2_1h_R2 + T2_2h_R2 + T2_3h_R2 + T2_4h_R2 + T2_5h_R2 + 
+    T2_6h_R2 + T3_1h_R2 + T3_3h_R2 + T3_5h_R2 + T3_6h_R2 , data = Data[,19:36])
+summary(mod_cp_T1)
+```
+
+```{python, eval=F, echo=F}
+#modèle selectionné par cp :
+data=datapy.loc[:,['T1_1h_R2' , 'T1_2h_R2' , 'T1_3h_R2' , 'T1_4h_R2' , 
+    'T1_5h_R2' , 'T2_1h_R2' , 'T2_2h_R2' , 'T2_3h_R2' , 'T2_4h_R2', 'T2_5h_R2' , 
+    'T2_6h_R2' , 'T3_1h_R2' , 'T3_3h_R2' , 'T3_5h_R2' , 'T3_6h_R2', 'T1_6h_R2']]
+list_var=data.columns.drop("T1_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T1_6h_R2)
+regmultipy = sm.OLS(y, X)
+modT1_cp = regmultipy.fit()
+print(modT1_cp.summary()) 
+```
+
+```{r,echo=F,eval=FALSE}
+
+stepAIC(mod_T1,direction = "backward")
+```
+
+```{r,echo=F,eval=F}
+mod_T1_AIC=lm(formula = T1_6h_R2 ~ T1_1h_R2 + T1_2h_R2 + T1_3h_R2 + T1_4h_R2 + 
+    T1_5h_R2 + T2_1h_R2 + T2_2h_R2 + T2_3h_R2 + T2_4h_R2 + T2_5h_R2 + 
+    T2_6h_R2 + T3_1h_R2 + T3_3h_R2 + T3_5h_R2 + T3_6h_R2, data = Data[, 
+    19:36])
+summary(mod_T1_AIC)
+```
+
+```{python, eval=F, echo=F}
+#modèle selectionné par aic :
+data=datapy.loc[:,['T1_1h_R2' , 'T1_2h_R2' , 'T1_3h_R2' , 'T1_4h_R2' , 
+    'T1_5h_R2' , 'T2_1h_R2' , 'T2_2h_R2' , 'T2_3h_R2' , 'T2_4h_R2', 'T2_5h_R2' , 
+    'T2_6h_R2' , 'T3_1h_R2' , 'T3_3h_R2' , 'T3_5h_R2' , 'T3_6h_R2', 'T1_6h_R2' ]]
+list_var=data.columns.drop("T1_6h_R2")
+X=data[list_var]
+X = sm.add_constant(X)
+y=np.array(data.T1_6h_R2)
+regmultipy = sm.OLS(y, X)
+modT1_aic = regmultipy.fit()
+print(modT1_aic.summary())   
+```
+
+```{r,echo=F,eval=F}
+anova(mod_bic_T1,mod_T1)
+anova(mod_T1_AIC,mod_T1)
+anova(mod_bic_T1,mod_T1_AIC)
+```
+
+```{python, eval=F, echo=F}
+anova_lm(modT1_bic,mod_compT1)
+anova_lm(modT1_aic,mod_compT1)
+anova_lm(modT1_bic,modT1_aic)
+```
+
+On va effectuer une sélection de variables en utilisant la régression Lasso comme méthode de sélection :
+
+```{r,echo=FALSE}
+Data_copy=Data[,19:36]
+tildeY=scale(Data_copy[, 6],center=T,scale=T)
+tildeX=scale(Data_copy[,-6],center=T,scale=T)
+
+```
+
+```{r,echo=FALSE,fig.show='hide'}
+fitlasso <- glmnet(tildeX,tildeY)
+
+df=data.frame(lambda = rep(fitlasso$lambda,ncol(tildeX)), theta=as.vector(t(fitlasso$beta)),variable=rep(colnames(tildeX),each=length(fitlasso$lambda)))
+g3 = ggplot(df,aes(x=lambda,y=theta,col=variable))+
+  geom_line()+
+  theme(legend.position="bottom")+
+  scale_x_log10()
+```
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,fig.align='center',fig.height=5}
+lasso_cv <- cv.glmnet(tildeX,tildeY,lambda = seq(0,1,0.01)) 
+best_lambda <-lasso_cv$lambda.min
+lambda1se <- lasso_cv$lambda.1se
+
+g3=g3 + 
+  geom_vline(xintercept = best_lambda,linetype="dotted", color = "red")+
+  geom_vline(xintercept = lambda1se,linetype="dotted", color = "blue")+
+  scale_x_log10()
+g3
+```
+
+On garde les variables suivantes en les pénalisant avec le lambda minimum :
+
+```{r,echo=FALSE}
+coef(lasso_cv,s = "lambda.min")
+```
+
+On n'arrive pas à réduire le modèle avec la méthode lasso, donc on va tester une autre méthode :
+
+```{r,eval=F,echo=F,fig.align='center',fig.height=3.5,fig.width=8}
+
+choix<-regsubsets(T1_6h_R2~.,nbest=1,nvmax=18,data=Data[,19:36],method="backward")
+#par(mfrow=c(1,2))
+plot(choix,scale="bic")
+#plot(choix,scale="Cp")
+
+```
+
+```{r,echo=FALSE}
+mod_bic_T1=lm(T1_6h_R2~T1_1h_R2+T1_2h_R2+ T1_3h_R2 + T1_4h_R2 + T1_5h_R2 + T2_1h_R2+ T2_2h_R2 + T2_3h_R2 + T2_6h_R2 + T3_1h_R2 +T3_3h_R2 + T3_5h_R2+ T3_6h_R2 , data = Data[,19:36])
+
+```
+
+```{r,echo=FALSE}
+mod_T1_AIC=lm(formula = T1_6h_R2 ~ T1_1h_R2 + T1_2h_R2 + T1_3h_R2 + T1_4h_R2 + 
+    T1_5h_R2 + T2_1h_R2 + T2_2h_R2 + T2_3h_R2 + T2_4h_R2 + T2_5h_R2 + 
+    T2_6h_R2 + T3_1h_R2 + T3_3h_R2 + T3_5h_R2 + T3_6h_R2, data = Data[, 
+    19:36])
+```
+
+On obtient deux modèles à partir des méthodes BIC et AIC comme méthode de sélection de variables.
+
+Dans le cas présent, le modèle trouvé avec la méthode BIC est un sous modèle de celui trouvé avec la méthode AIC.
+
+On effectue des tests de sous-modèle de Fisher afin de comparer les modèles obtenus car les modèles sont sous-modèle les uns des autres.
+
+```{r,echo=F,eval=F}
+anova(mod_bic_T1,mod_T1)
+anova(mod_T1_AIC,mod_T1)
+anova(mod_bic_T1,mod_T1_AIC)
+```
+
+On accepte dans un premier temps le modèle AIC car on a une p-valeur = 0.6966 \>\> 0.05. Et finalement, on accepte le modèle obtenu par BIC (une p-valeur=0.09 ).
+
+## Modèle Linéaire Généralisé pour T1 à 6h 
+
+
+```{r,echo=FALSE}
+df=Data[,19:36]
+df$T1_6h_R2<- cut(df$T1_6h_R2, breaks = c(-9999, -1,1,9999), labels = c("-1", "0", "1"))
+df$T1_6h_R2=as.factor(df$T1_6h_R2)
+#tmp=as.data.frame(res.acp$x[,-c(6)])
+#df[,-c(6)]=tmp[,-c(6)]
+df_copy=df
+```
+
+```{r,echo=F,results='hide'}
+
+modelnonord <-vglm(T1_6h_R2 ~ ., data = df, family = "multinomial")
+summary(modelnonord)
+```
+
+```{r,echo=FALSE,fig.show='hide',message=FALSE}
+df_copy=df
+
+train_data <- df[1:round(nrow(df)*0.8),]
+test_data <- df[(round(nrow(df)*0.8)+1):nrow(df),]
+
+x_train <- model.matrix(~.,data=train_data[,-6])
+y_train <- train_data[,6]
+lambdaseq=seq(from=0,to=1,by=0.001)
+
+fittt=glmnet(x_train, y_train, family="multinomial", alpha = 1)
+fit <- cv.glmnet(x_train, y_train, family="multinomial", alpha = 1,lambda = lambdaseq)
+
+
+
+df=data.frame(lambda = rep(fittt$lambda,ncol(x_train)), theta=as.vector(t(fittt$beta$`0`)),variable=rep(colnames(x_train),each=length(fittt$lambda)))
+g3 = ggplot(df,aes(x=lambda,y=theta,col=variable))+
+  geom_line()+
+  theme(legend.position="bottom")+
+  scale_x_log10()
+
+
+best_lambda <-fit$lambda.min
+lambda1se <- fit$lambda.1se
+
+g3=g3 + 
+  geom_vline(xintercept = best_lambda,linetype="dotted", color = "red")+
+  geom_vline(xintercept = lambda1se,linetype="dotted", color = "blue")+
+  scale_x_log10()
+g3
+
+
+```
+
+```{r,echo=FALSE}
+df=df_copy
+train_index <- sample(1:nrow(df), 0.8*nrow(df))
+x_train <- df[train_index, -6]
+y_train <- df[train_index, 6]
+x_test <- df[-train_index, -6]
+y_test <- df[-train_index, 6]
+
+# Fit multinomial regression model
+model <- multinom(y_train ~ ., data = x_train)
+
+# Make predictions on test set
+predictions <- predict(model, x_test)
+
+# Create confusion matrix
+confusion_matrix <- table(predicted = predictions, actual = y_test)
+confusion_matrix
+# Print overall accuracy
+accuracy <- sum(diag(confusion_matrix))/sum(confusion_matrix)
+print(accuracy)
+```
+
+On a une précision de 92%. On prédit bien la variable T1_6h_R2. Cependant, on a un petit souci avec les factors 1 et -1 car on a un manque de valeurs par rapport au facteur 0. La prédiction n'est donc pas trop fiable. Si on prend le cas du facteur 1, on a plus de 50% d'erreur. On en déduit que, avec ce modèle, on a une difficulté à prédire T1_6h_R2 quand les réponses sont sur/sous exprimées. 
+
+
+# Conclusion 
+Lors de ce projet, nous avons pu mettre en pratique les notions étudiées lors du cours de modélisation statistique et analyse des données. Les différentes méthodes et algorithmes que nous avons appliqué permettent d’avoir une analyse plus  approfondie de nos données. 
+
+D’abord, nous avons commencé par réaliser quelques statistiques descriptives sur notre jeu de données, pour pouvoir ensuite faire une classification en implémentant différentes méthodes qui nous ont permis d’identifier deux classes pour les gènes sur-exprimées et sous-exprimées. Ensuite, en comparant entre plusieurs algorithmes, nous avons pu sélectionner des modèles linéaires qui dépendent uniquement des temps affectant réellement l’expression des gènes à 6h pour les traitements T3 et T1. Nous avons également testé plusieurs modèles pour trouver les variables prédictives qui permettent de discriminer entre les gènes sur- / sous-/non-exprimés à 6h pour les traitements T1 et T3.
+
+Enfin, ce projet a montré l'importance de chacune des étapes citées précédemment, pour mieux comprendre notre jeu de données et avoir des conclusions solides pour poursuivre dans une étude plus approfondie de nos données.
+
+
